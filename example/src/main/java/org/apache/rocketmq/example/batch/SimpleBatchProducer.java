@@ -19,10 +19,17 @@ package org.apache.rocketmq.example.batch;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+
+import org.apache.rocketmq.client.Validators;
+import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.common.message.Message;
+import org.apache.rocketmq.common.message.MessageBatch;
+import org.apache.rocketmq.common.message.MessageClientIDSetter;
 
 public class SimpleBatchProducer {
 
@@ -34,17 +41,38 @@ public class SimpleBatchProducer {
     public static void main(String[] args) throws Exception {
         DefaultMQProducer producer = new DefaultMQProducer(PRODUCER_GROUP);
         // Uncomment the following line while debugging, namesrvAddr should be set to your local address
-//        producer.setNamesrvAddr(DEFAULT_NAMESRVADDR);
+        producer.setNamesrvAddr(DEFAULT_NAMESRVADDR);
         producer.start();
-
+//        producer.createTopic("DefaultCluster", TOPIC, 4, new HashMap<>());
         //If you just send messages of no more than 1MiB at a time, it is easy to use batch
         //Messages of the same batch should have: same topic, same waitStoreMsgOK and no schedule support
         List<Message> messages = new ArrayList<>();
         messages.add(new Message(TOPIC, TAG, "OrderID001", "Hello world 0".getBytes(StandardCharsets.UTF_8)));
         messages.add(new Message(TOPIC, TAG, "OrderID002", "Hello world 1".getBytes(StandardCharsets.UTF_8)));
         messages.add(new Message(TOPIC, TAG, "OrderID003", "Hello world 2".getBytes(StandardCharsets.UTF_8)));
+        MessageBatch batch = batch(messages, producer);
+        batch.putUserProperty("name", "value");
+        batch.forEach(p -> p.putUserProperty("name", "value"));
 
-        SendResult sendResult = producer.send(messages);
+        SendResult sendResult = producer.send(batch);
         System.out.printf("%s", sendResult);
+    }
+
+    static MessageBatch batch(Collection<Message> msgs, DefaultMQProducer producer) throws MQClientException {
+        MessageBatch msgBatch;
+        try {
+            msgBatch = MessageBatch.generateFromList(msgs);
+            for (Message message : msgBatch) {
+                Validators.checkMessage(message, producer);
+                MessageClientIDSetter.setUniqID(message);
+                message.setTopic(producer.withNamespace(message.getTopic()));
+            }
+            MessageClientIDSetter.setUniqID(msgBatch);
+            msgBatch.setBody(msgBatch.encode());
+        } catch (Exception e) {
+            throw new MQClientException("Failed to initiate the MessageBatch", e);
+        }
+        msgBatch.setTopic(producer.withNamespace(msgBatch.getTopic()));
+        return msgBatch;
     }
 }
